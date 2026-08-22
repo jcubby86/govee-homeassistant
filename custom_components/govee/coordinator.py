@@ -129,6 +129,7 @@ from .models.device import (
     MAINS_POWERED_DEVICE_TYPES,
 )
 from .models.device import GoveeLeakSensor, GoveeLeakSensorState
+from .models.one_click import GoveeOneClick
 from .scene_cache import SceneCacheManager
 from .repairs import (
     async_create_auth_issue,
@@ -366,6 +367,11 @@ class GoveeCoordinator(DataUpdateCoordinator[dict[str, GoveeDeviceState]]):
         # Leak sensor subsystem
         self._leak_sensors: dict[str, GoveeLeakSensor] = {}
         self._leak_states: dict[str, GoveeLeakSensorState] = {}
+        # Account-level Tap-to-Run / One-Click shortcuts (BFF, undocumented).
+        # Unlike per-device dynamic scenes (scene_cache.py), these aren't tied
+        # to a single GoveeDevice, so they're keyed by their own id here
+        # rather than living under self._devices.
+        self._one_clicks: dict[str, GoveeOneClick] = {}
         # BFF-discovered thermo-hygrometers (H5301, issue #86): synthesized into
         # self._devices but absent from the Developer API, so their state is
         # owned by the BFF poll, not /device/state. Tracked here so
@@ -679,6 +685,11 @@ class GoveeCoordinator(DataUpdateCoordinator[dict[str, GoveeDeviceState]]):
     def leak_states(self) -> dict[str, GoveeLeakSensorState]:
         """Get current leak states (device_id -> state)."""
         return self._leak_states
+
+    @property
+    def one_clicks(self) -> dict[str, GoveeOneClick]:
+        """Get all discovered Tap-to-Run / One-Click shortcuts."""
+        return self._one_clicks
 
     @property
     def bff_device_census(self) -> list[dict[str, Any]]:
@@ -1038,6 +1049,12 @@ class GoveeCoordinator(DataUpdateCoordinator[dict[str, GoveeDeviceState]]):
         # omits (issue #86). Also requires email/password.
         await self._run_startup_step(
             self._discover_bff_thermometers(), "discover BFF thermometers"
+        )
+
+        # Discover Tap-to-Run / One-Click shortcuts, surfaced as scene
+        # entities by scene.py. Also requires email/password.
+        await self._run_startup_step(
+            self._discover_one_clicks(), "discover one-click shortcuts"
         )
 
         # Standalone water detectors (H5054) deliver their trip only via the
@@ -2356,6 +2373,33 @@ class GoveeCoordinator(DataUpdateCoordinator[dict[str, GoveeDeviceState]]):
         except Exception as err:
             _LOGGER.warning("Failed to discover BFF thermo-hygrometers: %s", err)
             # Non-fatal: integration continues without these sensors.
+
+    async def _discover_one_clicks(self) -> None:
+        """Discover the account's Tap-to-Run / One-Click shortcuts (BFF).
+
+        Requires email/password login (``self._iot_credentials``), same as
+        leak sensors and BFF thermo-hygrometers. Non-fatal on failure — the
+        integration continues without One-Click scene entities.
+        """
+        if not self._iot_credentials:
+            return
+
+        async def _op(auth_client: GoveeAuthClient, token: str) -> Any:
+            return await auth_client.fetch_one_clicks(token)
+
+        try:
+            one_clicks = await self._async_bff_call(_op, "one-click list")
+            if one_clicks is None:
+                return
+
+            self._one_clicks = {oc.id: oc for oc in one_clicks}
+            if self._one_clicks:
+                _LOGGER.info(
+                    "Discovered %d One-Click shortcut(s)", len(self._one_clicks)
+                )
+        except Exception as err:
+            _LOGGER.warning("Failed to discover One-Click shortcuts: %s", err)
+            # Non-fatal: integration continues without these scene entities.
 
     async def _refresh_bff_thermometers(self) -> None:
         """Refresh temp/humidity readings for BFF thermo-hygrometers (issue #86)."""
@@ -3876,6 +3920,74 @@ class GoveeCoordinator(DataUpdateCoordinator[dict[str, GoveeDeviceState]]):
                 _LOGGER.debug("Got device topic for %s after refresh", device_id)
 
         return topic
+
+    async def async_execute_one_click(self, one_click_id: str) -> bool:
+        """Activate a Tap-to-Run / One-Click shortcut.
+
+        There is no Govee "execute" endpoint for this (see
+        ``api/auth.py:fetch_one_clicks``) — activating a shortcut means
+        replaying each of its stored rules to its target device's MQTT
+        topic, exactly as the Govee app itself would. MQTT-only: there is no
+        REST fallback for this feature.
+
+        A rule whose device topic can't be resolved (e.g. a group/scenic
+        virtual target with no MQTT topic, or an as-yet-unfetched topic) is
+        skipped with a warning rather than aborting the whole shortcut —
+        mirrors govee2mqtt's own known failure mode for such targets
+        (upstream issue #406).
+
+        Returns:
+            True if at least one rule published successfully.
+        """
+        one_click = self._one_clicks.get(one_click_id)
+        if one_click is None:
+            _LOGGER.error("Unknown One-Click shortcut: %s", one_click_id)
+            return False
+
+        if self._mqtt_client is None or not self.mqtt_connected:
+            _LOGGER.warning(
+                "Cannot activate One-Click '%s': MQTT not connected",
+                one_click.name,
+            )
+            return False
+
+        any_success = False
+        for rule in one_click.rules:
+            topic = rule.topic or await self._ensure_device_topic(rule.device_id)
+            if not topic:
+                _LOGGER.warning(
+                    "One-Click '%s': skipping rule for %s (no MQTT topic — "
+                    "possibly a group/scenic target)",
+                    one_click.name,
+                    rule.device_id,
+                )
+                continue
+
+            if rule.is_native:
+                success = await self._mqtt_client.async_publish_command(
+                    topic,
+                    rule.iot_cmd,
+                    rule.iot_data or {},
+                    cmd_version=rule.cmd_version,
+                )
+            elif rule.is_ble:
+                success = await self._mqtt_client.async_publish_ptreal(
+                    rule.device_id, rule.sku, rule.ble_packets or [], topic
+                )
+            else:
+                continue
+
+            any_success = any_success or success
+            if not success:
+                _LOGGER.warning(
+                    "One-Click '%s': publish failed for %s",
+                    one_click.name,
+                    rule.device_id,
+                )
+
+        if any_success:
+            _LOGGER.debug("Activated One-Click '%s'", one_click.name)
+        return any_success
 
     async def async_send_music_mode(
         self,

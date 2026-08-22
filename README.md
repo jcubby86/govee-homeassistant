@@ -54,7 +54,7 @@ Govee in Home Assistant has several integrations, and it's easy to pick one that
 
 | Integration | How it talks to Govee | Scenes / RGBIC segments | Non‑light devices | Notes |
 |---|---|---|---|---|
-| **This integration** | Cloud API v2 **+ AWS IoT MQTT push + local LAN (auto)** | ✅ Yes | Plugs, fans, humidifiers, heaters, sensors, leak hubs | Full feature set; push updates; LAN‑enabled lights controlled locally with cloud fallback; handles Govee's 2026 email‑2FA login |
+| **This integration** | Cloud API v2 **+ AWS IoT MQTT push + local LAN (auto)** | ✅ Yes (+ Tap‑to‑Run) | Plugs, fans, humidifiers, heaters, sensors, leak hubs | Full feature set; push updates; LAN‑enabled lights controlled locally with cloud fallback; handles Govee's 2026 email‑2FA login |
 | [`govee_light_local`](https://www.home-assistant.io/integrations/govee_light_local/) (HA built‑in) | LAN UDP | ❌ No | Lights only | Fast & local, but on/off + brightness + color only, and only models with LAN control enabled |
 | [`govee_ble`](https://www.home-assistant.io/integrations/govee_ble/) (HA built‑in) | Bluetooth | ❌ No | Sensors only | Read‑only sensors — **no light control** |
 | [govee2mqtt](https://github.com/wez/govee2mqtt) | LAN + cloud + MQTT | ✅ Yes | Wide | Most capable, but requires a separate MQTT broker/add‑on to run |
@@ -149,6 +149,7 @@ After setup, open **Settings → Devices & Services → Govee Cloud Integration 
 | **Enable group devices** | `off` | Surface the device groups you created in the Govee app as single light entities (power/brightness/color; state is best‑effort). |
 | **Enable scene selector** | `on` | Create a per‑device dropdown to activate Govee scenes. |
 | **Enable DIY scene selector** | `on` | Create a per‑device dropdown for your DIY scenes. |
+| **Enable Tap-to-Run / One-Click scene entities** | `off` | Create one clickable scene entity per Tap-to-Run / One-Click shortcut from the Govee app — multi-device automations, distinct from the per-device scene selector above. Requires account login and an active MQTT connection (no REST fallback). |
 | **Expose per‑device transport connectivity sensors** | `off` | Add diagnostic binary sensors showing each device's MQTT/BLE/LAN reachability. |
 | **Send power/brightness/color over MQTT (experimental)** | `off` | Routes those commands through Govee's MQTT channel instead of the REST API — lower latency, bypasses REST rate limits. Requires account login; falls back to REST automatically. Uses an undocumented channel, so leave off if commands misbehave. |
 | **LAN device addresses / subnets (advanced)** | *(blank)* | Only needed when LAN‑enabled devices sit on a different subnet/VLAN than Home Assistant. Comma‑separated IPs, broadcast addresses, and/or CIDR subnets (/24 or smaller). Leave blank when everything shares HA's network — discovery is automatic. Enter `off` to disable LAN discovery and local control entirely. |
@@ -198,6 +199,7 @@ data:
 ## Scenes, DIY, music & DreamView
 
 - **Scenes / DIY scenes** — activated through per‑device select dropdowns (toggle in options). The API doesn't reliably report the active scene, so the selection is preserved optimistically and cleared when you switch to another mode (color, color temp, music, etc.).
+- **Tap‑to‑Run / One‑Click** — the multi‑device automations you build in the Govee app (govee2mqtt calls this "click to run"). Toggle **Enable Tap-to-Run / One-Click scene entities** in options to get one HA scene entity per shortcut; activating it (Lovelace, `scene.turn_on`, an automation) replays it across every device it targets. Requires account login and MQTT — there's no REST path for this feature.
 - **Music mode** — exposed as a switch on capable lights.
 - **DreamView / video sync** — exposed as a switch on capable backlights.
 - Use the **`govee.refresh_scenes`** service to re‑pull the scene catalog (optionally for one `device_id`).

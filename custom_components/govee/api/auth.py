@@ -42,6 +42,7 @@ from ..models.device import (
     THERMO_HYGRO_BFF_READ_SKUS,
     THERMO_HYGRO_BFF_SKUS,
 )
+from ..models.one_click import GoveeOneClick, OneClickRule
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -212,6 +213,7 @@ GOVEE_VERIFICATION_URL = "https://app2.govee.com/account/rest/account/v1/verific
 GOVEE_IOT_KEY_URL = "https://app2.govee.com/app/v1/account/iot/key"
 GOVEE_DEVICE_LIST_URL = "https://app2.govee.com/device/rest/devices/v1/list"
 GOVEE_BFF_DEVICE_LIST_URL = "https://app2.govee.com/bff-app/v1/device/list"
+GOVEE_EXEC_PLAT_URL = "https://app2.govee.com/bff-app/v1/exec-plat/home"
 # Standalone water-detector leak alerts (H5054 via H5040 gateway, issue #62).
 # These RF-only sensors never reach the developer API / AWS IoT; their trip is
 # only retrievable from the account "warning message" history, matching the
@@ -338,6 +340,126 @@ def _raise_for_bff_status(data: Any, context: str) -> None:
     if status == 401:
         raise GoveeAuthError(f"BFF {context} rejected the token: {message}", code=401)
     raise GoveeApiError(f"BFF {context} failed: {message}", code=status)
+
+
+def _slugify(text: str) -> str:
+    """Lowercase, alnum-and-hyphen-only slug for a stable fallback entity id."""
+    slug = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
+    return slug or "one-click"
+
+
+def _parse_one_click_rule(rule_entry: dict[str, Any]) -> OneClickRule | None:
+    """Normalize one raw ``rule`` entry into an :class:`OneClickRule`, if executable.
+
+    A rule entry carries either an ``iotMsg`` (native cmd/data, replayed via
+    ``async_publish_command``) or a ``blueMsg`` (raw BLE passthrough bytes,
+    replayed via ``async_publish_ptreal``). Entries with neither (e.g. a bare
+    ``cmdType``/``cmdVal`` we don't yet decode) are skipped — the caller logs.
+    """
+    device_obj = rule_entry.get("_device_obj", {})
+    device_id = device_obj.get("device", "")
+    sku = device_obj.get("sku", "")
+    if not device_id:
+        return None
+    topic = device_obj.get("topic") or None
+
+    iot_msg = rule_entry.get("iotMsg")
+    if isinstance(iot_msg, dict) and iot_msg.get("cmd"):
+        return OneClickRule(
+            device_id=device_id,
+            sku=sku,
+            topic=topic,
+            iot_cmd=iot_msg["cmd"],
+            iot_data=iot_msg.get("data") or {},
+            cmd_version=_safe_int(iot_msg.get("cmdVersion")) or 0,
+        )
+
+    blue_msg = rule_entry.get("blueMsg")
+    if blue_msg:
+        packets = blue_msg if isinstance(blue_msg, list) else [blue_msg]
+        packets = [p for p in packets if isinstance(p, str) and p]
+        if packets:
+            return OneClickRule(
+                device_id=device_id, sku=sku, topic=topic, ble_packets=packets
+            )
+
+    return None
+
+
+def _find_one_click_dicts(node: Any) -> list[dict[str, Any]]:
+    """Recursively collect every dict shaped like a One-Click definition.
+
+    The exact container nesting under ``data`` (component groups, preset
+    types, etc.) is not confirmed against a live response yet (see
+    ``docs/govee-protocol-reference.md`` §4.3), so rather than hard-coding a
+    container key that might be wrong, this walks the whole response and
+    treats any ``{"name": str, "iotRules": list}`` dict as a One-Click — that
+    field pairing is the one part of the shape cross-checked against
+    govee2mqtt's ``OneClick { name, iot_rules }`` struct.
+    """
+    found: list[dict[str, Any]] = []
+    if isinstance(node, dict):
+        if isinstance(node.get("name"), str) and isinstance(node.get("iotRules"), list):
+            found.append(node)
+        else:
+            for value in node.values():
+                found.extend(_find_one_click_dicts(value))
+    elif isinstance(node, list):
+        for item in node:
+            found.extend(_find_one_click_dicts(item))
+    return found
+
+
+def _parse_one_clicks(data: Any) -> list[GoveeOneClick]:
+    """Parse the ``exec-plat/home`` response body into ``GoveeOneClick``s.
+
+    Only One-Clicks with at least one executable rule (native or BLE) are
+    returned — an entry that resolves to zero executable rules (unknown
+    ``cmdType``, group-only target, etc.) is dropped rather than surfaced as
+    a scene that silently does nothing when activated.
+    """
+    payload = data.get("data") if isinstance(data, dict) else None
+    if payload is None:
+        return []
+
+    one_clicks: list[GoveeOneClick] = []
+    seen_ids: set[str] = set()
+    for raw in _find_one_click_dicts(payload):
+        name = raw.get("name") or "One-Click"
+        raw_id = raw.get("presetId") or raw.get("id")
+        one_click_id = str(raw_id) if raw_id else _slugify(name)
+        if one_click_id in seen_ids:
+            one_click_id = f"{one_click_id}-{len(seen_ids)}"
+        seen_ids.add(one_click_id)
+
+        rules: list[OneClickRule] = []
+        for iot_rule in raw.get("iotRules", []):
+            if not isinstance(iot_rule, dict):
+                continue
+            device_obj = iot_rule.get("deviceObj") or {}
+            for rule_entry in iot_rule.get("rule", []):
+                if not isinstance(rule_entry, dict):
+                    continue
+                # Thread the device context into the rule entry so
+                # _parse_one_click_rule doesn't need a second parameter.
+                enriched = {**rule_entry, "_device_obj": device_obj}
+                parsed = _parse_one_click_rule(enriched)
+                if parsed is not None:
+                    rules.append(parsed)
+                else:
+                    _LOGGER.debug(
+                        "One-Click %r: skipping rule with no iotMsg/blueMsg "
+                        "(keys=%s)",
+                        name,
+                        sorted(rule_entry.keys()),
+                    )
+
+        if rules:
+            one_clicks.append(GoveeOneClick(id=one_click_id, name=name, rules=rules))
+        else:
+            _LOGGER.debug("One-Click %r has no executable rules, skipping", name)
+
+    return one_clicks
 
 
 def _derive_client_id(email: str) -> str:
@@ -799,6 +921,68 @@ class GoveeAuthClient:
         except aiohttp.ClientError as err:
             raise GoveeApiError(
                 f"Connection error fetching device topics: {err}"
+            ) from err
+
+    async def fetch_one_clicks(self, token: str) -> list[GoveeOneClick]:
+        """Fetch the account's Tap-to-Run / One-Click shortcuts (BFF, undocumented).
+
+        ``GET /bff-app/v1/exec-plat/home`` — documented as a bare endpoint
+        name in ``docs/govee-protocol-reference.md`` §4.3 but never
+        implemented until now. There is no separate "execute" endpoint:
+        each shortcut's ``iotRules`` already carry the exact MQTT payloads
+        the Govee app itself would publish, so activating a One-Click means
+        replaying those payloads (see ``coordinator.async_execute_one_click``).
+
+        Args:
+            token: Authentication token (from app2 login).
+
+        Returns:
+            Parsed One-Click shortcuts with at least one executable rule.
+            Entries with unrecognized rule shapes are dropped (logged at
+            debug) rather than surfaced as a scene that does nothing.
+
+        Raises:
+            GoveeAuthError: If the server rejects the token (401, or the
+                in-body BFF error envelope — see ``_raise_for_bff_status``).
+            GoveeApiError: If the request fails for other reasons.
+        """
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "appVersion": GOVEE_APP_VERSION,
+            "clientType": GOVEE_CLIENT_TYPE,
+            "iotVersion": GOVEE_IOT_VERSION,
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        }
+        try:
+            async with self._require_session().get(
+                GOVEE_EXEC_PLAT_URL,
+                headers=headers,
+            ) as response:
+                data = await response.json()
+
+                if response.status == 401:
+                    message = data.get("message", "Unauthorized")
+                    raise GoveeAuthError(
+                        f"One-Click fetch auth failed (401): {message}"
+                    )
+                if response.status != 200:
+                    message = data.get("message", f"HTTP {response.status}")
+                    raise GoveeApiError(
+                        f"One-Click fetch failed: {message}", code=response.status
+                    )
+
+                _raise_for_bff_status(data, "one-click list")
+                _LOGGER.debug(
+                    "One-Click raw response: %s", _sanitize_response_for_logging(data)
+                )
+                one_clicks = _parse_one_clicks(data)
+                _LOGGER.info("Fetched %d One-Click shortcut(s)", len(one_clicks))
+                return one_clicks
+
+        except aiohttp.ClientError as err:
+            raise GoveeApiError(
+                f"Connection error fetching One-Click list: {err}"
             ) from err
 
     async def fetch_bff_thermo_hygrometers(

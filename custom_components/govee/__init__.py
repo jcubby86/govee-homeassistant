@@ -62,6 +62,7 @@ _LOGGER = logging.getLogger(__name__)
 # Order determines entity display order in device view
 PLATFORMS: list[Platform] = [
     Platform.SELECT,  # Scene dropdowns - show first
+    Platform.SCENE,  # Tap-to-Run / One-Click click-to-run entities
     Platform.NUMBER,  # DIY speed controls
     Platform.LIGHT,  # Main light + segments
     Platform.FAN,  # Fan devices

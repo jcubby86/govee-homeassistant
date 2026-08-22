@@ -39,6 +39,7 @@ from .const import (
     CONF_ENABLE_DIY_SCENES,
     CONF_ENABLE_GROUPS,
     CONF_ENABLE_MQTT_CONTROL,
+    CONF_ENABLE_ONE_CLICK,
     CONF_ENABLE_SCENES,
     CONF_EXPOSE_TRANSPORT_ENTITIES,
     CONF_LAN_TARGETS,
@@ -50,6 +51,7 @@ from .const import (
     DEFAULT_ENABLE_DIY_SCENES,
     DEFAULT_ENABLE_GROUPS,
     DEFAULT_ENABLE_MQTT_CONTROL,
+    DEFAULT_ENABLE_ONE_CLICK,
     DEFAULT_ENABLE_SCENES,
     DEFAULT_EXPOSE_TRANSPORT_ENTITIES,
     DEFAULT_LAN_TARGETS,
@@ -422,6 +424,7 @@ class GoveeConfigFlow(ConfigFlow, domain=DOMAIN):
                 CONF_ENABLE_GROUPS: DEFAULT_ENABLE_GROUPS,
                 CONF_ENABLE_SCENES: DEFAULT_ENABLE_SCENES,
                 CONF_ENABLE_DIY_SCENES: DEFAULT_ENABLE_DIY_SCENES,
+                CONF_ENABLE_ONE_CLICK: DEFAULT_ENABLE_ONE_CLICK,
                 CONF_WATER_DETECTOR_POLL_INTERVAL: (
                     DEFAULT_WATER_DETECTOR_POLL_INTERVAL
                 ),
@@ -760,6 +763,12 @@ class GoveeOptionsFlow(OptionsFlow):
                         CONF_ENABLE_DIY_SCENES,
                         default=source.get(
                             CONF_ENABLE_DIY_SCENES, DEFAULT_ENABLE_DIY_SCENES
+                        ),
+                    ): bool,
+                    vol.Optional(
+                        CONF_ENABLE_ONE_CLICK,
+                        default=source.get(
+                            CONF_ENABLE_ONE_CLICK, DEFAULT_ENABLE_ONE_CLICK
                         ),
                     ): bool,
                     vol.Optional(

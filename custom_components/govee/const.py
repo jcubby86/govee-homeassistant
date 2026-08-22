@@ -14,6 +14,10 @@ CONF_POLL_INTERVAL: Final = "poll_interval"
 CONF_ENABLE_GROUPS: Final = "enable_groups"
 CONF_ENABLE_SCENES: Final = "enable_scenes"
 CONF_ENABLE_DIY_SCENES: Final = "enable_diy_scenes"
+# Account-level Tap-to-Run / One-Click shortcuts, surfaced as scene entities
+# (scene.py) — distinct from CONF_ENABLE_SCENES, which gates the per-device
+# dynamic-scene dropdown (select.py). Requires account login + MQTT.
+CONF_ENABLE_ONE_CLICK: Final = "enable_one_click"
 CONF_EXPOSE_TRANSPORT_ENTITIES: Final = "expose_transport_entities"
 CONF_ENABLE_MQTT_CONTROL: Final = "enable_mqtt_control"
 
@@ -143,6 +147,7 @@ DEFAULT_POLL_INTERVAL: Final = 60  # seconds
 DEFAULT_ENABLE_GROUPS: Final = False
 DEFAULT_ENABLE_SCENES: Final = True
 DEFAULT_ENABLE_DIY_SCENES: Final = True
+DEFAULT_ENABLE_ONE_CLICK: Final = False
 DEFAULT_SEGMENT_MODE: Final = "individual"  # "disabled", "grouped", or "individual"
 DEFAULT_EXPOSE_TRANSPORT_ENTITIES: Final = False
 DEFAULT_ENABLE_MQTT_CONTROL: Final = False

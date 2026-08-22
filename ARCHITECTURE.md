@@ -30,7 +30,7 @@ custom_components/govee/
 ├── coordinator.py           # DataUpdateCoordinator with MQTT integration
 ├── entity.py                # Base entity class (GoveeEntity)
 ├── light.py                 # Light platform
-├── scene.py                 # Scene platform
+├── scene.py                 # Scene platform (Tap-to-Run/One-Click shortcuts; opt-in)
 ├── switch.py                # Switch platform (plugs, night light)
 ├── sensor.py                # Sensor platform (rate limit, MQTT status)
 ├── button.py                # Button platform (refresh scenes)

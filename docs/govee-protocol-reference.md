@@ -1099,8 +1099,48 @@ User-Agent: GoveeHome/7.4.10 (com.ihoment.GoVeeSensor; build:2; iOS 18.4.0) Alam
 | `/appsku/v1/light-effect-libraries` | GET | Get scene catalog |
 | `/appsku/v2/devices/scenes/attributes` | GET | Get scene attributes |
 | `/appsku/v1/diys/groups-diys` | GET | Get DIY scenes |
-| `/bff-app/v1/exec-plat/home` | GET | Get One-Click/Tap-to-Run |
+| `/bff-app/v1/exec-plat/home` | GET | **One-Click / Tap-to-Run shortcuts** — implemented; see §4.3c |
 | `/bff-app/v1/device/list` | POST | **Account device list (BFF)** — richest per-device state; see §4.3b |
+
+### 4.3c One-Click / Tap-to-Run (`api/auth.py:fetch_one_clicks`)
+
+`GET https://app2.govee.com/bff-app/v1/exec-plat/home` (constant `GOVEE_EXEC_PLAT_URL`) — same headers as the other BFF calls in this section (`Authorization: Bearer {token}`, `appVersion`/`clientType`/`iotVersion`). Returns the account's Tap-to-Run / One-Click shortcuts: multi-device automations authored in the Govee app (govee2mqtt calls this "click to run"), distinct from the per-device `lightScene`/`diyScene` capabilities in §4.1.
+
+**There is no separate "execute" endpoint.** Each shortcut's rules already carry the exact MQTT payload the Govee app itself would publish; activating a shortcut means replaying those payloads to each target device's topic (`coordinator.async_execute_one_click`).
+
+**Response shape (reverse-engineered from govee2mqtt's Rust source, not yet confirmed against a live account — see the parser's tolerant-walk design note below):**
+
+```json
+{
+  "status": 200,
+  "data": {
+    "oneClicks": [
+      {
+        "name": "Movie Night",
+        "presetId": 42,
+        "iotRules": [
+          {
+            "deviceObj": {"device": "AA:BB:CC:DD:EE:FF:00:11", "sku": "H6072", "topic": "GD/..."},
+            "rule": [
+              {"iotMsg": {"cmd": "turn", "data": {"val": 1}, "cmdVersion": 0}}
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+A `rule` entry carries either:
+- `iotMsg` — native `cmd`/`data`/`cmdVersion`, the same wire format `api/mqtt_control.py:command_to_mqtt` produces for direct `turn`/`brightness`/`colorwc` control. Replayed via `GoveeAwsIotClient.async_publish_command`.
+- `blueMsg` — raw BLE passthrough bytes (base64), the same shape `ble_passthrough.py` already sends for DreamView/DIY-scene/music-mode. Replayed via `GoveeAwsIotClient.async_publish_ptreal`.
+
+**Parsing is deliberately shape-tolerant** (`api/auth.py:_parse_one_clicks`/`_find_one_click_dicts`): rather than hard-coding the exact container nesting under `data` (which real accounts may organize differently — govee2mqtt's own test fixtures show component groupings, preset types, and device groups mixed together), the parser recursively walks the response and treats any `{"name": str, "iotRules": list}` dict as a One-Click. The `name`/`iotRules` pairing is the one part of the shape cross-checked against govee2mqtt's `OneClick { name, iot_rules }` struct. A shortcut with zero rules that parse to something executable is dropped rather than surfaced as a scene that silently does nothing.
+
+**Known upstream rough edges (govee2mqtt issue tracker, likely to affect this implementation too):**
+- Rules can target `SameModeGroup`/`DreamViewScenic` virtual devices that don't resolve to a normal MQTT topic (govee2mqtt #406) — `async_execute_one_click` skips such a rule with a warning rather than failing the whole shortcut.
+- Some rule entries use `cmdType`/`cmdVal` shapes not yet decoded here (e.g. scene-code references); these are skipped and logged rather than guessed at.
 
 ### 4.3b Account Device List (BFF) — `deviceExt` scalar catalog
 

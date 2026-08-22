@@ -49,6 +49,7 @@ custom_components/govee/
 ├── entity.py            # Base GoveeEntity class
 ├── light.py             # Light platform
 ├── select.py            # Scene/DIY/HDMI/music mode selectors
+├── scene.py             # Tap-to-Run/One-Click click-to-run entities (opt-in)
 ├── switch.py            # Switch platform (plugs, night light, music, DreamView)
 ├── sensor.py            # Diagnostic sensors
 ├── button.py            # Refresh scenes button
@@ -291,6 +292,7 @@ vol.Optional(CONF_POLL_INTERVAL, default=...): vol.All(vol.Coerce(int), vol.Rang
 vol.Optional(CONF_ENABLE_GROUPS, default=...): bool,
 vol.Optional(CONF_ENABLE_SCENES, default=...): bool,
 vol.Optional(CONF_ENABLE_DIY_SCENES, default=...): bool,
+vol.Optional(CONF_ENABLE_ONE_CLICK, default=...): bool,
 vol.Optional(CONF_ENABLE_SEGMENTS, default=...): bool,
 ```
 
@@ -312,10 +314,12 @@ Update both files when changing option labels:
 The project structure has evolved:
 ```
 custom_components/govee/
-├── select.py            # Scene selector dropdowns (replaced scene.py)
+├── select.py            # Scene selector dropdowns (replaced the old per-scene scene.py)
+├── scene.py             # Tap-to-Run/One-Click shortcuts as scene entities (re-added; opt-in)
 ├── platforms/
 │   └── segment.py       # RGBIC segment light entities
 ```
 
-- **select.py**: One dropdown per device for scene selection
+- **select.py**: One dropdown per device for per-device dynamic/DIY scene selection
+- **scene.py**: One entity per account-level Tap-to-Run/One-Click shortcut (`CONF_ENABLE_ONE_CLICK`, default off). Not the same feature as select.py's dropdowns — a per-device `scene.py` existed before and was removed 2026-01-10 because it produced 324 entities on a real account; this scene.py is for the much smaller, account-level One-Click list instead, so that concern doesn't apply. MQTT-only (no REST fallback) — see `docs/govee-protocol-reference.md` §4.3c.
 - **segment.py**: Individual light entities for each RGBIC segment
